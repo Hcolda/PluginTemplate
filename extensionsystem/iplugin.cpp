@@ -7,6 +7,11 @@ IPlugin::IPlugin()
 
 }
 
+IPlugin::~IPlugin()
+{
+
+}
+
 bool IPlugin::initialize(const QStringList &arguments, QString &errorString)
 {
     initialize();

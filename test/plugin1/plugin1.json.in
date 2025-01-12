@@ -1,0 +1,18 @@
+﻿{
+    "IID": "MyProject.Plugin",
+    "Name": "My Project Plugin1",
+    "Version": "1.0.0",
+    "Description": "This is my first plugin",
+    "CompatVersion": "1.0.0",
+    "Required": true,
+    "Experimental": false,
+    "License": "MIT",
+    "Dependencies": [
+    {
+        "Name": "My Project Plugin2",
+        "Version": "1.0.0",
+        "Type": "required"
+    }
+    ],
+    "Arguments": []
+}

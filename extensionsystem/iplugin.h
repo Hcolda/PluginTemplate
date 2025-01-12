@@ -12,6 +12,7 @@ enum class PluginShutdownFlag
 
 class EXTENSIONSYSTEM_EXPORT IPlugin : public QObject
 {
+    Q_OBJECT
 public:
     IPlugin();
     ~IPlugin() override;

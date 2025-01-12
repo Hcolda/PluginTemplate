@@ -1,8 +1,10 @@
-﻿#include "pluginmanager.h"
+#include "pluginmanager.h"
 
 #include "extensionsystemtr.h"
 #include "pluginspecification.h"
-#include <utils/algorithm.h>
+#include <QDir>
+#include <QFileInfoList>
+#include <ranges>
 #include <utils/hostinfo.h>
 
 
@@ -56,7 +58,7 @@ bool PluginManager::loadQueue(PluginSpecification *spec, QVector<PluginSpecifica
     return true;
 }
 
-static inline QString getPlatformName()
+inline static QString getPlatformName()
 {
     if (Utils::HostInfo::isMacHost())
         return QLatin1String("OS X");
@@ -77,11 +79,6 @@ void PluginManager::loadPlugin(PluginSpecification *spec, PluginState destState)
 {
     if (spec->hasError() || spec->state() != destState-1)
         return;
-
-    // don't load disabled plugins.
-    if (!spec->isEffectivelyEnabled() && destState == PluginState::Loaded)
-        return;
-
 
     const std::string specName = spec->name().toStdString();
 
@@ -149,19 +146,90 @@ void PluginManager::startDelayedInitialize()
     emit initializationDone();
 }
 
-Utils::Settings *PluginManager::settings() const
+
+void PluginManager::setPluginPaths(const QStringList &paths)
 {
-    return m_settings;
+    m_pluginPaths = paths;
 }
 
-void PluginManager::setSettings(Utils::Settings *settings)
+void PluginManager::readPluginPaths()
+{
+    qDeleteAll(m_pluginSpecs);
+    m_pluginSpecs.clear();
+
+    // from the file system
+    for (const QString &pluginFile : pluginFiles(m_pluginPaths)) {
+        PluginSpecification *spec = PluginSpecification::readPlugin(pluginFile);
+        if (spec)
+            m_pluginSpecs.append(spec);
+    }
+    // static
+    for (const QStaticPlugin &plugin : QPluginLoader::staticPlugins()) {
+        PluginSpecification *spec = PluginSpecification::readPlugin(plugin);
+        if (spec)
+            m_pluginSpecs.append(spec);
+    }
+
+    for (PluginSpecification *spec : std::as_const(m_pluginSpecs))
+        spec->resolveDependencies(m_pluginSpecs);
+    // ensure deterministic plugin load order by sorting
+    std::ranges::sort(m_pluginSpecs, {}, &PluginSpecification::name);
+    emit pluginsChanged();
+}
+
+QStringList PluginManager::pluginFiles(const QStringList &pluginPaths)
 {
 
-    if (m_settings)
-        delete m_settings;
-    m_settings = settings;
-    if (m_settings)
-        m_settings->setParent(this);
+    QStringList pluginFiles;
+    QStringList searchPaths = pluginPaths;
+    while (!searchPaths.isEmpty()) {
+        QDir dir(searchPaths.takeFirst());
+        QFileInfoList files = dir.entryInfoList(QDir::Files | QDir::NoSymLinks);
+        //const QStringList absoluteFilePaths = Utils::transform(files, &QFileInfo::absoluteFilePath);
+        //using std::ranges::transform;
+        QStringList absoluteFilePaths = files |
+                                        std::views::transform(&QFileInfo::absoluteFilePath) |
+                                        std::ranges::to<QStringList>();
+        pluginFiles += absoluteFilePaths |
+                       std::views::filter([](const QString &path) { return QLibrary::isLibrary(path); }) |
+                       std::ranges::to<QStringList>();
+        const QFileInfoList dirs = dir.entryInfoList(QDir::Dirs|QDir::NoDotAndDotDot);
+        searchPaths += dirs |
+                       std::views::transform(&QFileInfo::absoluteFilePath) |
+                       std::ranges::to<QStringList>();
+    }
+    return pluginFiles;
+}
+
+void ExtensionSystem::PluginManager::shutdown()
+{
+    stopAll();
+    if (!m_asynchronousPlugins.isEmpty()) {
+        m_shutdownEventLoop = new QEventLoop;
+        m_shutdownEventLoop->exec();
+    }
+    deleteAll();
+}
+
+void ExtensionSystem::PluginManager::stopAll()
+{
+    m_isShuttingDown = true;
+    m_delayedInitializeTimer.stop();
+
+    const QVector<PluginSpecification *> queue = loadQueue();
+    for (PluginSpecification *spec : queue)
+        loadPlugin(spec, PluginState::Stopped);
+}
+
+void ExtensionSystem::PluginManager::deleteAll()
+{
+    // Utils::reverseForeach(loadQueue(), [this](PluginSpec *spec) {
+    //     loadPlugin(spec, PluginSpec::Deleted);
+    // });
+    auto queue = loadQueue();
+    std::ranges::for_each(queue | std::views::reverse, [this](PluginSpecification *spec) {
+        loadPlugin(spec, PluginState::Deleted);
+    });
 }
 
 PluginManager &PluginManager::instance()
@@ -229,10 +297,13 @@ void PluginManager::loadPlugins()
     const QVector<PluginSpecification *> queue = loadQueue();
 
     for (PluginSpecification *spec : queue)
+        loadPlugin(spec, PluginState::Loaded);
+    for (PluginSpecification *spec : queue)
         loadPlugin(spec, PluginState::Initialized);
 
     {
-        Utils::reverseForeach(queue, [this](PluginSpecification *spec) {
+        // reverse for_each
+        std::ranges::for_each(queue | std::views::reverse, [this](PluginSpecification *spec) {
             loadPlugin(spec, PluginState::Running);
             if (spec->state() == PluginState::Running) {
                 m_delayedInitializeQueue.enqueue(spec);
@@ -256,7 +327,7 @@ void PluginManager::loadPlugins()
 const QVector<PluginSpecification *> PluginManager::loadQueue()
 {
     QVector<PluginSpecification *> queue;
-    for (PluginSpecification *spec : std::as_const(m_pluginSpecifications)) {
+    for (PluginSpecification *spec : std::as_const(m_pluginSpecs)) {
         QVector<PluginSpecification *> circularityCheckQueue;
         loadQueue(spec, queue, circularityCheckQueue);
     }

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <QString>
 #include <QObject>
@@ -8,12 +8,11 @@
 #include <QEventLoop>
 #include <QTimer>
 #include <QQueue>
-#include <utils/settings.h>
 #include "pluginspecification.h"
 
 namespace ExtensionSystem
 {
-class PluginManager : public QObject
+class EXTENSIONSYSTEM_EXPORT PluginManager : public QObject
 {
     Q_OBJECT
 public:
@@ -25,13 +24,26 @@ public:
     void addObject(QObject *obj);
     void removeObject(QObject *obj);
     QVector<QPointer<QObject>> allObjects();
+
+    template <typename T> T *getObject()
+    {
+        const QVector<QPointer<QObject>> all = allObjects();
+        for (QObject *obj : all) {
+            if (T *result = qobject_cast<T *>(obj))
+                return result;
+        }
+        return nullptr;
+    }
     QReadWriteLock *listLock();
 
     void loadPlugins();
     const QVector<PluginSpecification *> loadQueue();
-    Utils::Settings *settings() const;
-    void setSettings(Utils::Settings *settings);
-
+    void setPluginPaths(const QStringList &paths);
+    void readPluginPaths();
+    QStringList pluginFiles(const QStringList &pluginPaths);
+    void shutdown();
+    void stopAll();
+    void deleteAll();
 private:
     PluginManager();
     bool loadQueue(PluginSpecification *spec,
@@ -40,15 +52,17 @@ private:
     void loadPlugin(PluginSpecification *spec, PluginState destState);
     void startDelayedInitialize();
     QString m_pluginIID;
-    Utils::Settings *m_settings;
     mutable QReadWriteLock m_lock;
     QVector<QPointer<QObject>> m_allObjects;
     QSet<PluginSpecification *> m_asynchronousPlugins;
     QVector<PluginSpecification *> m_pluginSpecs;
     QEventLoop *m_shutdownEventLoop = nullptr;
+    QHash<QString, QVector<PluginSpecification *>> m_pluginCategories;
     QQueue<PluginSpecification *> m_delayedInitializeQueue;
     QTimer m_delayedInitializeTimer;
     bool m_isInitializationDone = false;
+    bool m_isShuttingDown = false;
+    QStringList m_pluginPaths;
 signals:
     void objectAdded(QObject *obj);
     void aboutToRemoveObject(QObject *obj);

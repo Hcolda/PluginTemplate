@@ -1,4 +1,4 @@
-﻿#include "pluginspecification.h"
+#include "pluginspecification.h"
 #include <QFileInfo>
 #include <QHashFunctions>
 #include <QJsonArray>
@@ -6,33 +6,29 @@
 #include <QDir>
 #include <QLoggingCategory>
 #include <utils/hostinfo.h>
-#include <utils/stringutils.h>
 #include "pluginmanager.h"
 #include "extensionsystemtr.h"
 #include "iplugin.h"
+#include <nlohmann/json.hpp>
+#include <print>
+#include <iostream>
 
 
-Q_LOGGING_CATEGORY(pluginLog, "qtc.extensionsystem", QtWarningMsg)
+Q_LOGGING_CATEGORY(pluginLog, "extensionsystem", QtWarningMsg)
 
 namespace ExtensionSystem {
 
 namespace Constants
 {
+const char kIID[] = "IID";
 const char kPluginMetadata[] = "MetaData";
 const char kPluginName[] = "Name";
 const char kPluginVersion[] = "Version";
 const char kPluginCompatversion[] = "CompatVersion";
 const char kPluginRequired[] = "Required";
 const char kPluginExperimental[] = "Experimental";
-const char kPluginDisabledByDefault[] = "DisabledByDefault";
-const char kVendor[] = "Vendor";
-const char kCopyright[] = "Copyright";
-const char kLicense[] = "License";
 const char kDescription[] = "Description";
-const char kLongDescription[] = "LongDescription";
-const char kUrl[] = "Url";
-const char kCategory[] = "Category";
-const char kPlatform[] = "Platform";
+const char kLicense[] = "License";
 const char kDependencies[] = "Dependencies";
 const char kDependencyName[] = "Name";
 const char kDependencyVersion[] = "Version";
@@ -44,52 +40,7 @@ const char kArguments[] = "Arguments";
 const char kArgumentName[] = "Name";
 const char kArgumentParameter[] = "Parameter";
 const char kArgumentDescription[] = "Description";
-const char versionRegExp[] = "^([0-9]+)(?:[.]([0-9]+))?(?:[.]([0-9]+))?(?:_([0-9]+))?$";
 }
-namespace Helpers
-{
-static inline QString msgValueMissing(const char *key)
-{
-    return Tr::tr("\"%1\" is missing").arg(QLatin1String(key));
-}
-
-static inline QString msgValueIsNotAString(const char *key)
-{
-    return Tr::tr("Value for key \"%1\" is not a string")
-        .arg(QLatin1String(key));
-}
-
-static inline QString msgValueIsNotABool(const char *key)
-{
-    return Tr::tr("Value for key \"%1\" is not a bool")
-        .arg(QLatin1String(key));
-}
-
-static inline QString msgValueIsNotAObjectArray(const char *key)
-{
-    return Tr::tr("Value for key \"%1\" is not an array of objects")
-        .arg(QLatin1String(key));
-}
-
-static inline QString msgValueIsNotAMultilineString(const char *key)
-{
-    return Tr::tr("Value for key \"%1\" is not a string and not an array of strings")
-        .arg(QLatin1String(key));
-}
-
-static inline QString msgInvalidFormat(const char *key, const QString &content)
-{
-    return Tr::tr("Value \"%2\" for key \"%1\" has invalid format")
-        .arg(QLatin1String(key), content);
-}
-
-static inline bool isValidVersion(const QString &version)
-{
-    return QRegularExpression(Constants::versionRegExp).match(version).hasMatch();
-}
-
-}
-
 
 QString PluginSpecification::name() const
 {
@@ -106,54 +57,14 @@ QString PluginSpecification::compatVersion() const
     return m_compatVersion;
 }
 
-QString PluginSpecification::vendor() const
-{
-    return m_vendor;
-}
-
-QString PluginSpecification::category() const
-{
-    return m_category;
-}
-
 QString PluginSpecification::description() const
 {
     return m_description;
 }
 
-QString PluginSpecification::longDescription() const
-{
-    return m_longDescription;
-}
-
-QString PluginSpecification::url() const
-{
-    return m_url;
-}
-
-QString PluginSpecification::revision() const
-{
-    return m_revision;
-}
-
-QString PluginSpecification::location() const
-{
-    return m_location;
-}
-
-QString PluginSpecification::copyright() const
-{
-    return m_copyright;
-}
-
 QString PluginSpecification::license() const
 {
     return m_license;
-}
-
-QRegularExpression PluginSpecification::platformSpecificationRegExp() const
-{
-    return m_platformSpecification;
 }
 
 IPlugin *PluginSpecification::plugin() const
@@ -169,21 +80,6 @@ bool PluginSpecification::isRequired() const
 bool PluginSpecification::isExperimental() const
 {
     return m_experimental;
-}
-
-bool PluginSpecification::isEnabledByDefault() const
-{
-    return m_enabledByDefault;
-}
-
-bool PluginSpecification::isEnabledBySettings() const
-{
-    return m_enabledBySettings;
-}
-
-QJsonObject PluginSpecification::metaData() const
-{
-    return m_metaData;
 }
 
 PluginState PluginSpecification::state() const
@@ -237,12 +133,16 @@ void PluginSpecification::addArguments(const QStringList &arguments)
     m_arguments.append(arguments);
 }
 
+void PluginSpecification::setArguments(const QStringList &arguments)
+{
+    m_arguments = arguments;
+}
+
 bool PluginSpecification::read(const QString &filePath)
 {
     reset();
     QFileInfo fileInfo(filePath);
-    m_location = fileInfo.absolutePath();
-    m_filePath = fileInfo.absoluteFilePath();
+    m_filePath = filePath;
     m_loader.emplace();
     if (Utils::HostInfo::isMacHost())
         m_loader->setLoadHints(QLibrary::ExportExternalSymbolsHint);
@@ -258,27 +158,27 @@ bool PluginSpecification::read(const QString &filePath)
     return true;
 }
 
+bool PluginSpecification::read(const QStaticPlugin &plugin)
+{
+    reset();
+    m_staticPlugin = plugin;
+    if (!readMetaData(plugin.metaData()))
+        return false;
+
+    m_state = PluginState::Read;
+    return true;
+}
+
 void PluginSpecification::reset()
 {
     m_name.clear();
     m_version.clear();
     m_compatVersion.clear();
-    m_vendor.clear();
-    m_category.clear();
     m_description.clear();
-    m_longDescription.clear();
-    m_url.clear();
-    m_revision.clear();
-    m_location.clear();
-    m_filePath.clear();
-    m_platformSpecification.setPattern(QString());
-    m_copyright.clear();
     m_license.clear();
     m_plugin = nullptr;
     m_required = false;
     m_experimental = false;
-    m_enabledByDefault = true;
-    m_metaData = QJsonObject();
     m_state = PluginState::Invalid;
     m_dependencies.clear();
     m_dependencySpecifications.clear();
@@ -320,230 +220,128 @@ bool PluginSpecification::loadLibrary()
 }
 
 bool PluginSpecification::readMetaData(const QJsonObject &pluginMetaData)
+try
 {
-    qCDebug(pluginLog) << "MetaData:" << QJsonDocument(pluginMetaData).toJson();
-    QJsonValue value;
-    value = pluginMetaData.value(QLatin1String("IID"));
-    if (!value.isString()) {
-        qCDebug(pluginLog) << "Not a plugin (no string IID found)";
+
+    QString qJson = QString(QJsonDocument(pluginMetaData).toJson());
+    nlohmann::json j = nlohmann::json::parse(qJson.toStdString());
+    auto iid = QString::fromStdString(j[Constants::kIID].get<std::string>());
+    if (iid != PluginManager::instance().pluginIID()) {
+        m_errorString = ::ExtensionSystem::Tr::tr("Plugin does not have the correct IID");
         return false;
     }
-    if (value.toString() != PluginManager::instance().pluginIID()) {
-        qCDebug(pluginLog) << "Plugin ignored (IID does not match)";
-        return false;
-    }
-
-    value = pluginMetaData.value(QLatin1String(Constants::kPluginMetadata));
-    if (!value.isObject()) {
-        return reportError(::ExtensionSystem::Tr::tr("Plugin meta data not found"));
-    }
-    m_metaData = value.toObject();
-
-    value = m_metaData.value(QLatin1String(Constants::kPluginName));
-    if (value.isUndefined())
-        return reportError(Helpers::msgValueMissing(Constants::kPluginName));
-    if (!value.isString())
-        return reportError(Helpers::msgValueIsNotAString(Constants::kPluginName));
-    m_name = value.toString();
-
-    value = m_metaData.value(QLatin1String(Constants::kPluginVersion));
-    if (value.isUndefined())
-        return reportError(Helpers::msgValueMissing(Constants::kPluginVersion));
-    if (!value.isString())
-        return reportError(Helpers::msgValueIsNotAString(Constants::kPluginVersion));
-    m_version = value.toString();
-    if (!Helpers::isValidVersion(m_version))
-        return reportError(Helpers::msgInvalidFormat(Constants::kPluginVersion, m_version));
-
-    value = m_metaData.value(QLatin1String(Constants::kPluginCompatversion));
-    if (!value.isUndefined() && !value.isString())
-        return reportError(Helpers::msgValueIsNotAString(Constants::kPluginCompatversion));
-    m_compatVersion = value.toString(m_version);
-    if (!value.isUndefined() && !Helpers::isValidVersion(m_compatVersion))
-        return reportError(Helpers::msgInvalidFormat(Constants::kPluginCompatversion, m_compatVersion));
-
-    value = m_metaData.value(QLatin1String(Constants::kPluginRequired));
-    if (!value.isUndefined() && !value.isBool())
-        return reportError(Helpers::msgValueIsNotABool(Constants::kPluginRequired));
-    m_required = value.toBool(false);
-    qCDebug(pluginLog) << "required = " << m_required;
-
-    value = m_metaData.value(QLatin1String(Constants::kPluginExperimental));
-    if (!value.isUndefined() && !value.isBool())
-        return reportError(Helpers::msgValueIsNotABool(Constants::kPluginExperimental));
-    m_experimental = value.toBool(false);
-    qCDebug(pluginLog) << "experimental = " << m_experimental;
-
-    value = m_metaData.value(QLatin1String(Constants::kPluginDisabledByDefault));
-    if (!value.isUndefined() && !value.isBool())
-        return reportError(Helpers::msgValueIsNotABool(Constants::kPluginDisabledByDefault));
-    m_enabledByDefault = !value.toBool(false);
-    qCDebug(pluginLog) << "enabledByDefault = " << m_enabledByDefault;
-
-    if (m_experimental)
-        m_enabledByDefault = false;
-    m_enabledBySettings = m_enabledByDefault;
-
-    value = m_metaData.value(QLatin1String(Constants::kVendor));
-    if (!value.isUndefined() && !value.isString())
-        return reportError(Helpers::msgValueIsNotAString(Constants::kVendor));
-    m_vendor = value.toString();
-
-    value = m_metaData.value(QLatin1String(Constants::kCopyright));
-    if (!value.isUndefined() && !value.isString())
-        return reportError(Helpers::msgValueIsNotAString(Constants::kCopyright));
-    m_copyright = value.toString();
-
-    value = m_metaData.value(QLatin1String(Constants::kDescription));
-    if (!value.isUndefined() && !Utils::readMultiLineString(value, m_description))
-        return reportError(Helpers::msgValueIsNotAString(Constants::kDescription));
-
-    value = m_metaData.value(QLatin1String(Constants::kLongDescription));
-    if (!value.isUndefined() && !Utils::readMultiLineString(value, m_longDescription))
-        return reportError(Helpers::msgValueIsNotAString(Constants::kLongDescription));
-
-    value = m_metaData.value(QLatin1String(Constants::kUrl));
-    if (!value.isUndefined() && !value.isString())
-        return reportError(Helpers::msgValueIsNotAString(Constants::kUrl));
-    m_url = value.toString();
-
-    value = m_metaData.value(QLatin1String(Constants::kCategory));
-    if (!value.isUndefined() && !value.isString())
-        return reportError(Helpers::msgValueIsNotAString(Constants::kCategory));
-    m_category = value.toString();
-
-    value = m_metaData.value(QLatin1String(Constants::kLicense));
-    if (!value.isUndefined() && !Utils::readMultiLineString(value, m_license))
-        return reportError(Helpers::msgValueIsNotAMultilineString(Constants::kLicense));
-
-    value = m_metaData.value(QLatin1String(Constants::kPlatform));
-    if (!value.isUndefined() && !value.isString())
-        return reportError(Helpers::msgValueIsNotAString(Constants::kPlatform));
-    const QString platformSpec = value.toString().trimmed();
-    if (!platformSpec.isEmpty()) {
-        m_platformSpecification.setPattern(platformSpec);
-        if (!m_platformSpecification.isValid()) {
-            return reportError(::ExtensionSystem::Tr::tr("Invalid platform specification \"%1\": %2")
-                                   .arg(platformSpec, m_platformSpecification.errorString()));
+    auto json = j[Constants::kPluginMetadata];
+    std::print("Plugin1::toStdString\n");
+    std::print("{0}1231231\n", json.dump(4));
+    std::cout .flush();
+    m_name = QString::fromStdString(json[Constants::kPluginName].get<std::string>());
+    m_version = QString::fromStdString(json[Constants::kPluginVersion].get<std::string>());
+    m_compatVersion = QString::fromStdString(json[Constants::kPluginCompatversion].get<std::string>());
+    m_description = QString::fromStdString(json[Constants::kDescription].get<std::string>());
+    m_license = QString::fromStdString(json[Constants::kPluginName].get<std::string>());
+    m_required = json[Constants::kPluginRequired].get<bool>();
+    m_experimental = json[Constants::kPluginExperimental].get<bool>();
+    // Dependencies
+    auto dependencies = json[Constants::kDependencies];
+    if (!dependencies.is_null()) {
+        if (!dependencies.is_array()) {
+            m_errorString = ::ExtensionSystem::Tr::tr("Dependencies must be an array");
+            return false;
+        }
+        for (const auto &dep : dependencies) {
+            if (!dep.is_object()) {
+                m_errorString = ::ExtensionSystem::Tr::tr("Dependency must be an object");
+                return false;
+            }
+            auto name = QString::fromStdString(dep[Constants::kDependencyName].get<std::string>());
+            auto version = QString::fromStdString(dep[Constants::kDependencyVersion].get<std::string>());
+            auto type = QString::fromStdString(dep[Constants::kDependencyType].get<std::string>());
+            PluginDependency::Type depType = PluginDependency::Type::Required;;
+            if (type == Constants::kDependencyTypeSoft)
+                depType = PluginDependency::Type::Optional;
+            else if (type == Constants::kDependencyTypeTest)
+                depType = PluginDependency::Type::Test;
+            PluginDependency dependency;
+            dependency.name = name;
+            dependency.version = version;
+            dependency.type = depType;
+            m_dependencies.append(dependency);
         }
     }
-
-    value = m_metaData.value(QLatin1String(Constants::kDependencies));
-    if (!value.isUndefined() && !value.isArray())
-        return reportError(Helpers::msgValueIsNotAObjectArray(Constants::kDependencies));
-    if (!value.isUndefined()) {
-        const QJsonArray array = value.toArray();
-        for (const QJsonValue &v : array) {
-            if (!v.isObject())
-                return reportError(Helpers::msgValueIsNotAObjectArray(Constants::kDependencies));
-            QJsonObject dependencyObject = v.toObject();
-            PluginDependency dep;
-            value = dependencyObject.value(QLatin1String(Constants::kDependencyName));
-            if (value.isUndefined()) {
-                return reportError(
-                    ::ExtensionSystem::Tr::tr("Dependency: %1")
-                        .arg(Helpers::msgValueMissing(Constants::kDependencyName)));
+    // Arguments
+    auto arguments = json[Constants::kArguments];
+    if (!arguments.is_null()) {
+        if (!arguments.is_array()) {
+            m_errorString = ::ExtensionSystem::Tr::tr("Arguments must be an array");
+            return false;
+        }
+        for (const auto &arg : arguments) {
+            if (!arg.is_object()) {
+                m_errorString = ::ExtensionSystem::Tr::tr("Argument must be an object");
+                return false;
             }
-            if (!value.isString()) {
-                return reportError(
-                    ::ExtensionSystem::Tr::tr("Dependency: %1")
-                        .arg(Helpers::msgValueIsNotAString(Constants::kDependencyName)));
-            }
-            dep.name = value.toString();
-            value = dependencyObject.value(QLatin1String(Constants::kDependencyVersion));
-            if (!value.isUndefined() && !value.isString()) {
-                return reportError(
-                    ::ExtensionSystem::Tr::tr("Dependency: %1")
-                        .arg(Helpers::msgValueIsNotAString(Constants::kDependencyVersion)));
-            }
-            dep.version = value.toString();
-            if (!Helpers::isValidVersion(dep.version)) {
-                return reportError(
-                    ::ExtensionSystem::Tr::tr("Dependency: %1")
-                        .arg(Helpers::msgInvalidFormat(Constants::kDependencyVersion, dep.version)));
-            }
-            dep.type = PluginDependency::Type::Required;
-            value = dependencyObject.value(QLatin1String(Constants::kDependencyType));
-            if (!value.isUndefined() && !value.isString()) {
-                return reportError(
-                    ::ExtensionSystem::Tr::tr("Dependency: %1")
-                        .arg(Helpers::msgValueIsNotAString(Constants::kDependencyType)));
-            }
-            if (!value.isUndefined()) {
-                const QString typeValue = value.toString();
-                if (typeValue.toLower() == QLatin1String(Constants::kDependencyTypeHard)) {
-                    dep.type = PluginDependency::Type::Required;
-                } else if (typeValue.toLower() == QLatin1String(Constants::kDependencyTypeSoft)) {
-                    dep.type = PluginDependency::Type::Optional;
-                } else if (typeValue.toLower() == QLatin1String(Constants::kDependencyTypeTest)) {
-                    dep.type = PluginDependency::Type::Test;
-                } else {
-                    return reportError(
-                        ::ExtensionSystem::Tr::tr(
-                            "Dependency: \"%1\" must be \"%2\" or \"%3\" (is \"%4\").")
-                            .arg(QLatin1String(Constants::kDependencyType),
-                                 QLatin1String(Constants::kDependencyTypeHard),
-                                 QLatin1String(Constants::kDependencyTypeSoft),
-                                 typeValue));
-                }
-            }
-            m_dependencies.append(dep);
+            auto name = QString::fromStdString(arg[Constants::kArgumentName].get<std::string>());
+            auto parameter = QString::fromStdString(arg[Constants::kArgumentParameter].get<std::string>());
+            auto description = QString::fromStdString(arg[Constants::kArgumentDescription].get<std::string>());
+            PluginArgumentDescription argument;
+            argument.name = name;
+            argument.parameter = parameter;
+            argument.description = description;
+            m_argumentDescriptions.append(argument);
         }
     }
-
-    value = m_metaData.value(QLatin1String(Constants::kArguments));
-    if (!value.isUndefined() && !value.isArray())
-        return reportError(Helpers::msgValueIsNotAObjectArray(Constants::kArguments));
-    if (!value.isUndefined()) {
-        const QJsonArray array = value.toArray();
-        for (const QJsonValue &v : array) {
-            if (!v.isObject())
-                return reportError(Helpers::msgValueIsNotAObjectArray(Constants::kArguments));
-            QJsonObject argumentObject = v.toObject();
-            PluginArgumentDescription arg;
-            value = argumentObject.value(QLatin1String(Constants::kArgumentName));
-            if (value.isUndefined()) {
-                return reportError(
-                    ::ExtensionSystem::Tr::tr("Argument: %1")
-                        .arg(Helpers::msgValueMissing(Constants::kArgumentName)));
-            }
-            if (!value.isString()) {
-                return reportError(
-                    ::ExtensionSystem::Tr::tr("Argument: %1")
-                        .arg(Helpers::msgValueIsNotAString(Constants::kArgumentName)));
-            }
-            arg.name = value.toString();
-            if (arg.name.isEmpty()) {
-                return reportError(
-                    ::ExtensionSystem::Tr::tr("Argument: \"%1\" is empty")
-                        .arg(QLatin1String(Constants::kArgumentName)));
-            }
-            value = argumentObject.value(QLatin1String(Constants::kArgumentDescription));
-            if (!value.isUndefined() && !value.isString()) {
-                return reportError(
-                    ::ExtensionSystem::Tr::tr("Argument: %1")
-                        .arg(Helpers::msgValueIsNotAString(Constants::kArgumentDescription)));
-            }
-            arg.description = value.toString();
-            value = argumentObject.value(QLatin1String(Constants::kArgumentParameter));
-            if (!value.isUndefined() && !value.isString()) {
-                return reportError(
-                    ::ExtensionSystem::Tr::tr("Argument: %1")
-                        .arg(Helpers::msgValueIsNotAString(Constants::kArgumentParameter)));
-            }
-            arg.parameter = value.toString();
-            m_argumentDescriptions.append(arg);
-            qCDebug(pluginLog) << "Argument:" << arg.name << "Parameter:" << arg.parameter
-                               << "Description:" << arg.description;
-        }
-    }
-
     return true;
+}
+catch (const nlohmann::json::exception &e)
+{
+    m_errorString = ::ExtensionSystem::Tr::tr("Error parsing plugin metadata: %1").arg(e.what());
+    return false;
 }
 
 bool PluginSpecification::reportError(const QString &errorString)
 {
     m_errorString = errorString;
+    return true;
+}
+
+bool PluginSpecification::resolveDependencies(const QVector<PluginSpecification *> &specs)
+{
+    if (m_errorString.has_value())
+        return false;
+    if (m_state == PluginState::Resolved)
+        m_state = PluginState::Read; // Go back, so we just re-resolve the dependencies.
+    if (m_state != PluginState::Read) {
+        m_errorString = ::ExtensionSystem::Tr::tr("Resolving dependencies failed because state != Read");
+        return false;
+    }
+    QHash<PluginDependency, PluginSpecification *> resolvedDependencies;
+    for (const PluginDependency &dependency : std::as_const(m_dependencies)) {
+        // PluginSpecification * const found = Utils::findOrDefault(specs, [&dependency](PluginSpecification *spec) {
+        //     return spec->provides(dependency.name, dependency.version);
+        // });
+        // use std::ranges
+        auto it = std::ranges::find_if(specs, [&dependency](PluginSpecification *spec) {
+            return spec->provides(dependency.name, dependency.version);
+        }) ;
+        PluginSpecification * const found = it != specs.end() ? *it : nullptr;
+        if (!found) {
+            if (dependency.type == PluginDependency::Type::Required) {
+                if (m_errorString.has_value())
+                    m_errorString.value().append(QLatin1Char('\n'));
+                m_errorString.value().append(::ExtensionSystem::Tr::tr("Could not resolve dependency '%1(%2)'")
+                                       .arg(dependency.name, dependency.version));
+            }
+            continue;
+        }
+        resolvedDependencies.insert(dependency, found);
+    }
+    if (m_errorString)
+        return false;
+
+    m_dependencySpecifications = resolvedDependencies;
+
+    m_state = PluginState::Resolved;
+
     return true;
 }
 
@@ -557,20 +355,6 @@ bool PluginSpecification::hasError() const
     return m_errorString.has_value();
 }
 
-
-bool PluginSpecification::isAvailableForHostPlatform() const
-{
-    return m_platformSpecification.pattern().isEmpty()
-           || m_platformSpecification.match(PluginManager::platformName()).hasMatch();
-}
-
-bool PluginSpecification::isEffectivelyEnabled() const
-{
-
-    if (!isAvailableForHostPlatform())
-        return false;
-    return isEnabledBySettings();
-}
 
 void PluginSpecification::kill()
 {
@@ -614,6 +398,14 @@ PluginShutdownFlag PluginSpecification::stop()
     return m_plugin->aboutToShutdown();
 }
 
+bool PluginSpecification::provides(const QString &pluginName, const QString &version) const
+{
+    if (QString::compare(pluginName, m_name, Qt::CaseInsensitive) != 0)
+        return false;
+    return (versionCompare(m_version, version) >= 0) && (versionCompare(m_compatVersion, version) <= 0);
+
+}
+
 bool PluginSpecification::delayedInitialize()
 {
     if (m_errorString.has_value())
@@ -637,5 +429,45 @@ bool PluginDependency::operator==(const PluginDependency &other) const
 size_t qHash(const PluginDependency &value)
 {
     return qHash(value.name);
+}
+
+PluginSpecification *PluginSpecification::readPlugin(const QString &filePath)
+{
+    auto spec = new PluginSpecification;
+    if (!spec->read(filePath)) { // not a Qt Creator plugin
+        delete spec;
+        return nullptr;
+    }
+    return spec;
+}
+
+PluginSpecification *PluginSpecification::readPlugin(const QStaticPlugin &plugin)
+{
+    auto spec = new PluginSpecification;
+    if (!spec->read(plugin)) { // not a Qt Creator plugin
+        delete spec;
+        return nullptr;
+    }
+    return spec;
+}
+
+int PluginSpecification::versionCompare(const QString &version1, const QString &version2)
+{
+    static const QRegularExpression reg("^([0-9]+)(?:[.]([0-9]+))?(?:[.]([0-9]+))?(?:_([0-9]+))?$");
+    const QRegularExpressionMatch match1 = reg.match(version1);
+    const QRegularExpressionMatch match2 = reg.match(version2);
+    if (!match1.hasMatch())
+        return 0;
+    if (!match2.hasMatch())
+        return 0;
+    for (int i = 0; i < 4; ++i) {
+        const int number1 = match1.captured(i + 1).toInt();
+        const int number2 = match2.captured(i + 1).toInt();
+        if (number1 < number2)
+            return -1;
+        if (number1 > number2)
+            return 1;
+    }
+    return 0;
 }
 } // namespace ExtensionSystem

@@ -1,0 +1,9 @@
+include(CMakeFindDependencyMacro)
+find_dependency(Qt6 REQUIRED COMPONENTS Core)
+find_dependency(nlohmann_json REQUIRED)
+
+include("${CMAKE_CURRENT_LIST_DIR}/UtilsTargets.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/ExtensionSystemTargets.cmake")
+
+# get_target_property(Plugin_INCLUDE_DIR Utils INTERFACE_INCLUDE_DIRECTORIES)
+# get_target_property(Plugin_INCLUDE_DIR ExtensionSystem INTERFACE_INCLUDE_DIRECTORIES)
